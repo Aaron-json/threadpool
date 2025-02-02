@@ -16,13 +16,14 @@ void increment(void *arg) {
 int main(int argc, char *argv[]) {
   thread_arg_t counters = {};
 
-  const int THREAD_COUNT = 20;
+  const int THREAD_COUNT = 50;
+  const int JOB_COUNT = 1000;
   threadpool_t *tp = threadpool_create(THREAD_COUNT);
 
   threadpool_job_t job = {.arg = &counters, .func = &increment};
   threadpool_job_t *jobs = {&job};
 
-  for (int i = 0; i < 40; i++) {
+  for (int i = 0; i < JOB_COUNT; i++) {
     threadpool_submit(tp, &jobs, 1);
   }
 

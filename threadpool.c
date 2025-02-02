@@ -2,11 +2,10 @@
 #include <assert.h>
 #include <bits/pthreadtypes.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-threadpool_job_t *job_get_next(threadpool_job_t *job) { return job->next; }
 
 void *Thread_run(threadpool_t *tp);
 
@@ -34,14 +33,10 @@ threadpool_t *threadpool_create(unsigned int num) {
   pool->job_queue = job_queue;
   *(unsigned int *)&(pool->total_threads) = num;
 
-  pool->busy_threads_mutex = calloc(1, sizeof(pthread_mutex_t));
-  assert(pool->busy_threads_mutex != NULL);
+  pool->busy_threads_semaphore = calloc(1, sizeof(sem_t));
+  assert(pool->busy_threads_semaphore != NULL);
 
-  pool->threads_idle_cond = calloc(1, sizeof(pthread_cond_t));
-  assert(pool->threads_idle_cond != NULL);
-
-  pthread_mutex_init(pool->busy_threads_mutex, NULL);
-  pthread_cond_init(pool->threads_idle_cond, NULL);
+  sem_init(pool->busy_threads_semaphore, 0, num);
 
   // create threads
   pthread_t *threads = calloc(num, sizeof(pthread_t));
@@ -78,10 +73,8 @@ void threadpool_destroy(threadpool_t *tp) {
   free(tp->job_queue.is_empty);
 
   free(tp->threads);
-  pthread_mutex_destroy(tp->busy_threads_mutex);
-  pthread_cond_destroy(tp->threads_idle_cond);
-  free(tp->busy_threads_mutex);
-  free(tp->threads_idle_cond);
+  sem_destroy(tp->busy_threads_semaphore);
+  free(tp->busy_threads_semaphore);
   free(tp);
 }
 
@@ -106,9 +99,7 @@ threadpool_job_t *threadpool_get(threadpool_t *tp) {
 
     // add to the count of busy threads. must be done
     // atomically with incrementing job queue size
-    pthread_mutex_lock(tp->busy_threads_mutex);
-    tp->busy_threads_count++;
-    pthread_mutex_unlock(tp->busy_threads_mutex);
+    sem_wait(tp->busy_threads_semaphore);
   }
 
   pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
@@ -149,21 +140,7 @@ void threadpool_submit(threadpool_t *tp, threadpool_job_t **jobs,
   // update size
   tp->job_queue.size += batch_size;
 
-  // get number of threads that are not busy
-  pthread_mutex_lock(tp->busy_threads_mutex);
-  unsigned int available_threads = tp->total_threads - tp->busy_threads_count;
-  pthread_mutex_unlock(tp->busy_threads_mutex);
-
-  // try to wake up exactly the number of threads needed.
-  // Does not have to be accurate just an estimate since
-  // the number of available threads could change concurrently.
-  if (batch_size >= available_threads) {
-    pthread_cond_broadcast(tp->job_queue.not_empty);
-  } else {
-    for (unsigned int i = 0; i < batch_size; i++) {
-      pthread_cond_signal(tp->job_queue.not_empty);
-    }
-  }
+  pthread_cond_broadcast(tp->job_queue.not_empty);
   pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 }
 
@@ -178,13 +155,7 @@ void *Thread_run(threadpool_t *tp) {
     job->func(job->arg);
     free(job);
 
-    // decrement busy thread count
-    pthread_mutex_lock(tp->busy_threads_mutex);
-    tp->busy_threads_count--;
-    if (tp->busy_threads_count == 0) {
-      pthread_cond_signal(tp->threads_idle_cond);
-    }
-    pthread_mutex_unlock(tp->busy_threads_mutex);
+    sem_post(tp->busy_threads_semaphore);
   }
   return NULL;
 }
@@ -198,10 +169,7 @@ void threadpool_wait(threadpool_t *tp) {
   pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 
   // check that all processors are idle
-  pthread_mutex_lock(tp->busy_threads_mutex);
-  while (tp->busy_threads_count > 0) {
-    pthread_cond_wait(tp->threads_idle_cond, tp->busy_threads_mutex);
+  for (int i = 0; i < tp->total_threads; i++) {
+    sem_wait(tp->busy_threads_semaphore);
   }
-
-  pthread_mutex_unlock(tp->busy_threads_mutex);
 }

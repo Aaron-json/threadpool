@@ -2,6 +2,7 @@
 #define THREADPOOL_H
 #include <pthread.h>
 #include <stdbool.h>
+#include <semaphore.h>
 
 typedef void (*thread_func_t)(void *arg);
 
@@ -25,9 +26,7 @@ typedef struct {
 typedef struct {
   threadpool_job_queue_t job_queue; // queue of jobs waiting for a thread to run
   pthread_t *threads;          // pointer to the array of thread handles
-  pthread_mutex_t *busy_threads_mutex;
-  pthread_cond_t *threads_idle_cond;
-  unsigned int busy_threads_count;
+  sem_t *busy_threads_semaphore;
   const unsigned int total_threads; // readonly after definition
 } threadpool_t;
 
