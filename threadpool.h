@@ -9,7 +9,6 @@ typedef struct threadpool_job_t {
   thread_func_t func;            // thread function
   void *arg;                     // thread function arguments
   struct threadpool_job_t *next; // pointer to the next job in the queue
-  unsigned long size;            // size of the job calculated ahead of time
 } threadpool_job_t;
 
 typedef struct {
@@ -24,12 +23,12 @@ typedef struct {
 } threadpool_job_queue_t;
 
 typedef struct {
-  threadpool_job_queue_t jobs; // queue of jobs waiting for a thread to run
+  threadpool_job_queue_t job_queue; // queue of jobs waiting for a thread to run
   pthread_t *threads;          // pointer to the array of thread handles
   pthread_mutex_t *busy_threads_mutex;
   pthread_cond_t *threads_idle_cond;
-  unsigned int busy_threads;
-  unsigned int total_threads; // readonly after definition
+  unsigned int busy_threads_count;
+  const unsigned int total_threads; // readonly after definition
 } threadpool_t;
 
 typedef struct {

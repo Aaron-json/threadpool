@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 threadpool_job_t *job_get_next(threadpool_job_t *job) { return job->next; }
 
@@ -11,27 +12,27 @@ void *Thread_run(threadpool_t *tp);
 
 threadpool_t *threadpool_create(unsigned int num) {
   // create job queue
-  threadpool_job_queue_t jobs = {0};
+  threadpool_job_queue_t job_queue = {0};
 
-  jobs.job_queue_mutex = calloc(1, sizeof(pthread_mutex_t));
-  assert(jobs.job_queue_mutex != NULL);
+  job_queue.job_queue_mutex = calloc(1, sizeof(pthread_mutex_t));
+  assert(job_queue.job_queue_mutex != NULL);
 
-  jobs.not_empty = calloc(1, sizeof(pthread_cond_t));
-  assert(jobs.not_empty != NULL);
+  job_queue.not_empty = calloc(1, sizeof(pthread_cond_t));
+  assert(job_queue.not_empty != NULL);
 
-  jobs.is_empty = calloc(1, sizeof(pthread_cond_t));
-  assert(jobs.is_empty != NULL);
+  job_queue.is_empty = calloc(1, sizeof(pthread_cond_t));
+  assert(job_queue.is_empty != NULL);
 
-  pthread_mutex_init(jobs.job_queue_mutex, NULL);
-  pthread_cond_init(jobs.not_empty, NULL);
-  pthread_cond_init(jobs.is_empty, NULL);
+  pthread_mutex_init(job_queue.job_queue_mutex, NULL);
+  pthread_cond_init(job_queue.not_empty, NULL);
+  pthread_cond_init(job_queue.is_empty, NULL);
 
   // create pool
   threadpool_t *pool = calloc(1, sizeof(threadpool_t));
   assert(pool != NULL);
 
-  pool->jobs = jobs;
-  pool->total_threads = num;
+  pool->job_queue = job_queue;
+  *(unsigned int *)&(pool->total_threads) = num;
 
   pool->busy_threads_mutex = calloc(1, sizeof(pthread_mutex_t));
   assert(pool->busy_threads_mutex != NULL);
@@ -55,13 +56,13 @@ threadpool_t *threadpool_create(unsigned int num) {
 
 void threadpool_destroy(threadpool_t *tp) {
   // prevent concurrent access to job queue and this function
-  pthread_mutex_lock(tp->jobs.job_queue_mutex);
-  if (tp->jobs.shutdown) { // can only call destroy once
+  pthread_mutex_lock(tp->job_queue.job_queue_mutex);
+  if (tp->job_queue.shutdown) {
     return;
   }
-  tp->jobs.shutdown = 1;
-  pthread_cond_broadcast(tp->jobs.not_empty);
-  pthread_mutex_unlock(tp->jobs.job_queue_mutex);
+  tp->job_queue.shutdown = 1;
+  pthread_cond_broadcast(tp->job_queue.not_empty);
+  pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 
   // wait for all threads to gracefully terminate
   for (unsigned int i = 0; i < tp->total_threads; i++) {
@@ -69,12 +70,12 @@ void threadpool_destroy(threadpool_t *tp) {
   }
 
   // job queue deallocate
-  pthread_cond_destroy(tp->jobs.not_empty);
-  pthread_cond_destroy(tp->jobs.is_empty);
-  pthread_mutex_destroy(tp->jobs.job_queue_mutex);
-  free(tp->jobs.job_queue_mutex);
-  free(tp->jobs.not_empty);
-  free(tp->jobs.is_empty);
+  pthread_cond_destroy(tp->job_queue.not_empty);
+  pthread_cond_destroy(tp->job_queue.is_empty);
+  pthread_mutex_destroy(tp->job_queue.job_queue_mutex);
+  free(tp->job_queue.job_queue_mutex);
+  free(tp->job_queue.not_empty);
+  free(tp->job_queue.is_empty);
 
   free(tp->threads);
   pthread_mutex_destroy(tp->busy_threads_mutex);
@@ -85,35 +86,32 @@ void threadpool_destroy(threadpool_t *tp) {
 }
 
 threadpool_job_t *threadpool_get(threadpool_t *tp) {
-  pthread_mutex_lock(tp->jobs.job_queue_mutex);
-  while (tp->jobs.size == 0) {
-    pthread_cond_wait(tp->jobs.not_empty, tp->jobs.job_queue_mutex);
-    if (tp->jobs.shutdown) {
-      break;
-    }
+  pthread_mutex_lock(tp->job_queue.job_queue_mutex);
+  while (tp->job_queue.size == 0 && !tp->job_queue.shutdown) {
+    pthread_cond_wait(tp->job_queue.not_empty, tp->job_queue.job_queue_mutex);
   }
 
   threadpool_job_t *job;
-  if (tp->jobs.shutdown) {
+  if (tp->job_queue.shutdown) {
     job = NULL;
   } else {
-    job = tp->jobs.head;
+    job = tp->job_queue.head;
     // assert(job != NULL);
-    tp->jobs.head = job->next;
-    tp->jobs.size--;
+    tp->job_queue.head = job->next;
+    tp->job_queue.size--;
 
-    if (tp->jobs.size == 0) {
-      pthread_cond_signal(tp->jobs.is_empty);
+    if (tp->job_queue.size == 0) {
+      pthread_cond_signal(tp->job_queue.is_empty);
     }
 
     // add to the count of busy threads. must be done
     // atomically with incrementing job queue size
     pthread_mutex_lock(tp->busy_threads_mutex);
-    tp->busy_threads++;
+    tp->busy_threads_count++;
     pthread_mutex_unlock(tp->busy_threads_mutex);
   }
 
-  pthread_mutex_unlock(tp->jobs.job_queue_mutex);
+  pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
   return job;
 }
 
@@ -122,36 +120,51 @@ void threadpool_submit(threadpool_t *tp, threadpool_job_t **jobs,
   if (batch_size < 1) {
     return;
   }
-  // convert the array to a linked list
-  if (batch_size > 1) {
-    for (unsigned int i = 1; i < batch_size; i++) {
-      jobs[i - 1]->next = jobs[i];
-    }
+  // set up a new tail to link jobs
+  threadpool_job_t *new_tail = calloc(1, sizeof(threadpool_job_t));
+  new_tail->arg = jobs[0]->arg;
+  new_tail->func = jobs[0]->func;
+
+  // first element of the new jobs
+  threadpool_job_t *new_head = new_tail;
+
+  // form the new linked list
+  for (unsigned int i = 1; i < batch_size; i++) {
+    threadpool_job_t *job = calloc(1, sizeof(threadpool_job_t));
+    job->arg = jobs[i]->arg;
+    job->func = jobs[i]->func;
+    new_tail->next = jobs[i];
+    new_tail = jobs[i];
   }
 
-  pthread_mutex_lock(tp->jobs.job_queue_mutex);
-  if (tp->jobs.head == NULL) {
-    tp->jobs.head = *jobs;
+  pthread_mutex_lock(tp->job_queue.job_queue_mutex);
+  // append the new linked list
+  if (tp->job_queue.head == NULL) {
+    tp->job_queue.head = new_head;
+  } else {
+    tp->job_queue.tail->next = new_head;
   }
-  tp->jobs.tail = jobs[batch_size - 1];
-  tp->jobs.size += batch_size;
+  // update tail
+  tp->job_queue.tail = new_tail;
+  // update size
+  tp->job_queue.size += batch_size;
 
   // get number of threads that are not busy
   pthread_mutex_lock(tp->busy_threads_mutex);
-  unsigned int available_threads = tp->total_threads - tp->busy_threads;
+  unsigned int available_threads = tp->total_threads - tp->busy_threads_count;
   pthread_mutex_unlock(tp->busy_threads_mutex);
 
   // try to wake up exactly the number of threads needed.
   // Does not have to be accurate just an estimate since
   // the number of available threads could change concurrently.
   if (batch_size >= available_threads) {
-    pthread_cond_broadcast(tp->jobs.not_empty);
+    pthread_cond_broadcast(tp->job_queue.not_empty);
   } else {
     for (unsigned int i = 0; i < batch_size; i++) {
-      pthread_cond_signal(tp->jobs.not_empty);
+      pthread_cond_signal(tp->job_queue.not_empty);
     }
   }
-  pthread_mutex_unlock(tp->jobs.job_queue_mutex);
+  pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 }
 
 void *Thread_run(threadpool_t *tp) {
@@ -167,8 +180,8 @@ void *Thread_run(threadpool_t *tp) {
 
     // decrement busy thread count
     pthread_mutex_lock(tp->busy_threads_mutex);
-    tp->busy_threads--;
-    if (tp->busy_threads == 0) {
+    tp->busy_threads_count--;
+    if (tp->busy_threads_count == 0) {
       pthread_cond_signal(tp->threads_idle_cond);
     }
     pthread_mutex_unlock(tp->busy_threads_mutex);
@@ -178,15 +191,15 @@ void *Thread_run(threadpool_t *tp) {
 
 void threadpool_wait(threadpool_t *tp) {
   // wait for jobs queue to be empty first
-  pthread_mutex_lock(tp->jobs.job_queue_mutex);
-  while (tp->jobs.size > 0) {
-    pthread_cond_wait(tp->jobs.is_empty, tp->jobs.job_queue_mutex);
+  pthread_mutex_lock(tp->job_queue.job_queue_mutex);
+  while (tp->job_queue.size > 0) {
+    pthread_cond_wait(tp->job_queue.is_empty, tp->job_queue.job_queue_mutex);
   }
-  pthread_mutex_unlock(tp->jobs.job_queue_mutex);
+  pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 
   // check that all processors are idle
   pthread_mutex_lock(tp->busy_threads_mutex);
-  while (tp->busy_threads > 0) {
+  while (tp->busy_threads_count > 0) {
     pthread_cond_wait(tp->threads_idle_cond, tp->busy_threads_mutex);
   }
 
