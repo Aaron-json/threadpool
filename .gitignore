@@ -1,0 +1,5 @@
+# binary and object files
+*.out
+*.exe
+*.o
+atomic-count
