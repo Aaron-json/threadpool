@@ -57,14 +57,8 @@ void threadpool_submit(threadpool_t *tp, threadpool_job_t **batch,
                         unsigned int num);
 
 /**
- * Gets a single job from the threadpool.
- */
-threadpool_job_t *threadpool_get(threadpool_t *tp);
-
-
-/**
- * It waits for all jobs currently in the pool to finish.
- * Can be used as a synchronization point for threads adding jobs.
+ * Wait for all jobs currently in the pool to finish and all threads to be idle.
+ * Jobs must not be submitted concurrently with a call to threadpool_wait.
  */
 void threadpool_wait(threadpool_t *tp);
 

@@ -9,6 +9,11 @@
 
 void *Thread_run(threadpool_t *tp);
 
+/**
+ * Get a single job from the threadpool.
+ */
+threadpool_job_t *threadpool_get(threadpool_t *tp);
+
 threadpool_t *threadpool_create(unsigned int num) {
   // create job queue
   threadpool_job_queue_t job_queue = {0};
