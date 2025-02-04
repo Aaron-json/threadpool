@@ -145,7 +145,11 @@ void threadpool_submit(threadpool_t *tp, threadpool_job_t **jobs,
   // update size
   tp->job_queue.size += batch_size;
 
-  pthread_cond_broadcast(tp->job_queue.not_empty);
+  if (batch_size == 1) {
+    pthread_cond_signal(tp->job_queue.not_empty);
+  } else {
+    pthread_cond_broadcast(tp->job_queue.not_empty);
+  }
   pthread_mutex_unlock(tp->job_queue.job_queue_mutex);
 }
 
