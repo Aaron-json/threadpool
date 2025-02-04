@@ -13,7 +13,7 @@ void increment(void *arg) {
   counters->count++;
 }
 
-int main(int argc, char *argv[]) {
+int main() {
   thread_arg_t counters = {};
 
   const int THREAD_COUNT = 50;

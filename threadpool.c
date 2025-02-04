@@ -175,10 +175,10 @@ void threadpool_wait(threadpool_t *tp) {
 
   // check that all threads are idle by acquiring semaphores once for each
   // thread and releasing the locks to make sure future jobs can be added
-  for (int i = 0; i < tp->total_threads; i++) {
+  for (unsigned int i = 0; i < tp->total_threads; i++) {
     sem_wait(tp->busy_threads_semaphore);
   }
-  for (int i = 0; i < tp->total_threads; i++) {
+  for (unsigned int i = 0; i < tp->total_threads; i++) {
     sem_post(tp->busy_threads_semaphore);
   }
 }
