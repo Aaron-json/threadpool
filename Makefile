@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c11 -g -Wall -Wextra -Werror -pthread
+CFLAGS = -std=c11 -Wall -Wextra -Werror -pthread -O3
 
 threadpool.o: threadpool.c
 	$(CC) $(CFLAGS) -c threadpool.c
