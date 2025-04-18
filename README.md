@@ -2,7 +2,6 @@
 
 ## Overview
 A flexible, efficient thread pool implementation in C using POSIX threads, designed for concurrent task execution.
-This library requires C11 because future versions may use atomics and other constructs defined in the C11 standard.
 
 ## Features
 - Dynamic thread pool creation
